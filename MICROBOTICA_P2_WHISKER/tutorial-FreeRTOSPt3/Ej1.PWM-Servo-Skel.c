@@ -223,8 +223,8 @@ void girar_robot(float g)
 
 
 
-            PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT-20);
-            PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, COUNT_2MS);//Esto es para que gire sobre
+            PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+20);
+            PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, COUNT_1MS);//Esto es para que gire sobre
 
             vTaskDelay(1000);
 
@@ -248,6 +248,10 @@ void girar_robot(float g)
 
      while(1)
      {
+
+
+
+         /*
              mover_robot(18);
 
              girar_robot(90);
@@ -271,6 +275,7 @@ void girar_robot(float g)
              distancia_recorrida = 0.0;
 
              mover_robot(12);
+             */
 
 
     }
