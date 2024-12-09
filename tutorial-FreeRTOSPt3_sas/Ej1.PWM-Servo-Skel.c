@@ -49,17 +49,20 @@ static EventGroupHandle_t FlagsEventos;//flag de eventos
 #define INT_SENSOR_LINEA_ATRAS 0x10
 #define MOTOR_30KG_ENCENDER 0x20
 #define MOTOR_30KG_APAGAR 0x40
-
+#define INT_ENCODER_DER_MOV 0x80
+#define INT_ENCODER_IZQ_MOV 0x100
 
 //variables para controlar la distancia recorrida por el robot y el angulo de giro
 volatile float angulo_der = 0.0;
 volatile float angulo_izq = 0.0;
+volatile float angulo_der_mov = 0.0;
+volatile float angulo_izq_mov = 0.0;
 volatile float distancia_recorrida = 0.0;
 volatile float angulo_recorrido = 0.0;
-// Variables globales de posición
-float x = 0.0;
-float y = 0.0;
-float theta = 0.0; // Orientación en radianes
+// Variables globales de localización
+float rc1 = 0;
+float theta = 0;
+
 
 
 //PUERTOS USADOS, PARA SABERLO PARA FUTURAS IMPLEMENTACIONES
@@ -75,37 +78,106 @@ float theta = 0.0; // Orientación en radianes
 unsigned short B[8] = {40,35,30,25,20,15,10,5};
 unsigned short A[8] = {320,368,460,536,712,1073,1667,3457};
 
-void actualizar_odometria() {
-    static float angulo_izq_anterior = 0.0;
-    static float angulo_der_anterior = 0.0;
+void    ft_putchar_LCD(unsigned char data, int X, int Y)
+{
+    //write(1, &c, 1);
+    OLED_sendCharXY( data,  X,  Y);
+}
+
+void    ft_putnbr(int nb,int X, int *Y)
+{
+
+    if (nb < 0)
+    {
+        ft_putchar_LCD('-', X,(*Y)++);
+
+        if (nb == -2147483648)
+        {
+            ft_putchar_LCD('2',X,(*Y)++);
+
+            nb = 147483648;
+        }
+        else
+        {
+            nb = -nb;
+        }
+    }
+    if (nb >= 10)
+    {
+        ft_putnbr(nb / 10, X, Y);
+    }
+    ft_putchar_LCD ((nb % 10) + '0',X,(*Y)++);
+
+}
+void actualizar_odometria()
+{
+    EventBits_t eventosMOTOR;
+    float rc0 = 50; //le pasamos como argumento la distancia inicial al centro (50cm)
+    float angulo_izq_anterior = 0.0;
+    float angulo_der_anterior = 0.0;
     float d_izq;
     float d_der;
     float d;
     float delta_theta;
+    float drc;
     // Cambios en los ángulos
-    float delta_angulo_izq = angulo_izq - angulo_izq_anterior;
-    float delta_angulo_der = angulo_der - angulo_der_anterior;
+    float delta_angulo_izq;
+    float delta_angulo_der;
 
+
+
+    eventosMOTOR = xEventGroupWaitBits(FlagsEventos, INT_ENCODER_DER_MOV | INT_ENCODER_IZQ_MOV, pdFALSE, pdFALSE, portMAX_DELAY);
+
+    if (eventosMOTOR & INT_ENCODER_DER_MOV) {
+         xEventGroupClearBits(FlagsEventos, INT_ENCODER_DER_MOV);
+
+         UARTprintf("INTERRUPCION ODOMETRIA DER\n");
+         angulo_der_mov = angulo_der_mov + 60.0 * (M_PI / 180.0); // Convertir 60 grados a radiane
+
+     }
+
+     // Actualización del ángulo izquierdo
+     if (eventosMOTOR & INT_ENCODER_IZQ_MOV) {
+         xEventGroupClearBits(FlagsEventos, INT_ENCODER_IZQ_MOV);
+
+         UARTprintf("INTERRUPCION ODOMETRIA IZQ\n");
+         angulo_izq_mov = angulo_izq_mov + 60.0 * (M_PI / 180.0); // Convertir 60 grados a radianes
+
+
+     }
+     if(angulo_der_mov >= 2.0 * M_PI)
+     {
+         angulo_der_mov=0.0;
+     }
+     if(angulo_izq_mov >= 2.0 * M_PI)
+     {
+         angulo_izq_mov=0.0;
+     }
+     vTaskDelay(750);
+    delta_angulo_izq = angulo_izq_mov - angulo_izq_anterior;
+    delta_angulo_der = angulo_der_mov - angulo_der_anterior;
     // Guardar los valores actuales como anteriores
-    angulo_izq_anterior = angulo_izq;
-    angulo_der_anterior = angulo_der;
+    angulo_izq_anterior = angulo_izq_mov;
+    angulo_der_anterior = angulo_der_mov;
 
     // Calcular desplazamientos lineales
-    d_izq = RADIO * delta_angulo_izq;
-    d_der = RADIO * delta_angulo_der;
+    d_izq = -RADIO * delta_angulo_izq;
+    d_der = -RADIO * delta_angulo_der;
 
     // Calcular desplazamiento y cambio en orientación
-    d = (d_izq + d_der) / 2.0;
-    delta_theta = (d_der - d_izq) / DIST_RUEDAS;
+    d = (d_izq + d_der) / 2.0; //Velocidad lineal promedio
+    delta_theta = (d_der - d_izq) / DIST_RUEDAS;//Velocidad angular del robot
 
-    // Actualizar posición y orientación
-    theta += delta_theta;
-    x += d * cos(theta);
-    y += d * sin(theta);
 
-    // Imprimir la posición actual
-    UARTprintf("x: %d, y: %d, theta: %d\n", x, y, theta);
+    // Cambio en la distancia radial
+    drc = d * cos(theta) ;
+    rc1 = rc0 + drc; // Actualización de la distancia radial
+
+    theta += delta_theta;//orientacion
+    // Guardar el nuevo rc como estado inicial para la próxima iteración
+     rc0 = rc1;
 }
+
 
 void mover_robot(float c) {
     EventBits_t eventosMOTOR;
@@ -130,7 +202,6 @@ void mover_robot(float c) {
 
                 UARTprintf("INTERRUPCION DER\n");
                 angulo_der = angulo_der + 60.0 * (M_PI / 180.0); // Convertir 20 grados a radiane
-                actualizar_odometria();
 
             }
 
@@ -140,7 +211,7 @@ void mover_robot(float c) {
 
                 UARTprintf("INTERRUPCION IZQ\n");
                 angulo_izq = angulo_izq + 60.0 * (M_PI / 180.0); // Convertir 20 grados a radianes
-                actualizar_odometria();
+
 
             }
 
@@ -300,14 +371,18 @@ float wheel_base = 0.095;     // Distancia entre ruedas (metros)
 
      while(1)
      {
+         actualizar_odometria();
+         //mover_robot(10);
+         /*
          eventosMOTOR = xEventGroupWaitBits(FlagsEventos,WHISKER,pdFALSE,pdFALSE,portMAX_DELAY);
          xEventGroupClearBits(FlagsEventos,WHISKER);
+
          if (eventosMOTOR & WHISKER)
          {
              xEventGroupClearBits(FlagsEventos,WHISKER);
 
 
-/*
+
             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+20);
             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, COUNT_1MS);//Esto es para que gire sobre
 
@@ -315,9 +390,9 @@ float wheel_base = 0.095;     // Distancia entre ruedas (metros)
 
             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2);
             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT);
-            */
-         }
 
+         }
+*/
          }
 
 
@@ -345,20 +420,22 @@ float wheel_base = 0.095;     // Distancia entre ruedas (metros)
          {
              UARTprintf("SENSOR DELANTE\n");
              OLED_sendStrXY("sensor alante", 1, 0);
-             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2-50);
-             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+50);
+            // ft_putnbr(12346,0,0);
+             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2-20);
+             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+20);
 
          }
 
          if (eventosMOTOR & INT_SENSOR_LINEA_ATRAS)
          {
              UARTprintf("SENSOR ATRAS\n");
-             OLED_sendStrXY("sensor atras", 1, 0);
+//             OLED_sendStrXY("sensor atras", 1, 0);
+             //ft_putnbr(12346,0,0);
              GPIOPinWrite(GPIO_PORTF_BASE,GPIO_PIN_1,GPIO_PIN_1);
 
              GPIOPinWrite(GPIO_PORTF_BASE,GPIO_PIN_1,0);
-             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+50);
-             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT-50);
+             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+20);
+             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT-20);
          }
 
 
@@ -441,6 +518,9 @@ float wheel_base = 0.095;     // Distancia entre ruedas (metros)
     OLED_Init();
     OLED_clearDisplay();
     OLED_sendCharXY('#', 0, 0);
+    int Y = 0; // Columna inicial
+      int X = 0; // Fila inicial
+
 
 
             // Configura pulsadores placa TIVA (int. por flanco de bajada)
@@ -501,6 +581,8 @@ float wheel_base = 0.095;     // Distancia entre ruedas (metros)
          while(1);
      }
 
+     ft_putnbr(12348,X,&Y);///
+
     vTaskStartScheduler();
 
     while(1);
@@ -538,6 +620,7 @@ void GPIOFIntHandler(void)
         if((current_time_left-last_time_left)>=(0.35*configTICK_RATE_HZ))//anitrrebotes?
         {
             xEventGroupSetBitsFromISR(FlagsEventos, INT_ENCODER_DER,&higherPriorityTaskWoken);
+            xEventGroupSetBitsFromISR(FlagsEventos, INT_ENCODER_DER_MOV,&higherPriorityTaskWoken);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_IZQ);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_SENSOR_LINEA_DELANTE);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_SENSOR_LINEA_ATRAS);
@@ -553,6 +636,7 @@ void GPIOFIntHandler(void)
         if((current_time_right-last_time_right)>=(0.35*configTICK_RATE_HZ)){
 
             xEventGroupSetBitsFromISR(FlagsEventos, INT_ENCODER_IZQ,&higherPriorityTaskWoken);
+            xEventGroupSetBitsFromISR(FlagsEventos, INT_ENCODER_IZQ_MOV,&higherPriorityTaskWoken);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_DER);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_SENSOR_LINEA_DELANTE);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_SENSOR_LINEA_ATRAS);
@@ -569,6 +653,8 @@ void GPIOFIntHandler(void)
 
             xEventGroupSetBitsFromISR(FlagsEventos, INT_SENSOR_LINEA_DELANTE,&higherPriorityTaskWoken);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_DER);
+            xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_DER_MOV);
+            xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_IZQ_MOV);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_IZQ);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_SENSOR_LINEA_ATRAS);
 
@@ -585,6 +671,8 @@ void GPIOFIntHandler(void)
             xEventGroupSetBitsFromISR(FlagsEventos, INT_SENSOR_LINEA_ATRAS,&higherPriorityTaskWoken);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_DER);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_IZQ);
+            xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_DER_MOV);
+            xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_IZQ_MOV);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_SENSOR_LINEA_DELANTE);
 
 
