@@ -51,6 +51,7 @@ static EventGroupHandle_t FlagsEventos;//flag de eventos
 #define MOTOR_30KG_APAGAR 0x40
 #define INT_ENCODER_DER_MOV 0x80
 #define INT_ENCODER_IZQ_MOV 0x100
+<<<<<<< HEAD
 #define INT_SENSOR_LINEA_ATRAS2 0x200
 #define ESQUIVAR 0x400
 //estado para la planificacion
@@ -61,6 +62,9 @@ static EventGroupHandle_t FlagsEventos;//flag de eventos
 #define ESQUIVO 5
 
 int estado_anterior = ESTADO_BUSCAR_CENTRO; //Se empieza en buscar centro
+=======
+
+>>>>>>> b1c1bd5ab9cf4a224aad3cd25c3a19491aea60ce
 //variables para controlar la distancia recorrida por el robot y el angulo de giro
 volatile float angulo_der = 0.0;
 volatile float angulo_izq = 0.0;
@@ -133,17 +137,29 @@ void    ft_putnbr(int nb,int X, int *Y)
     ft_putchar_LCD ((nb % 10) + '0',X,(*Y)++);
 
 }
+<<<<<<< HEAD
 void actualizar_odometria(float rc0)
 {
     EventBits_t eventosMOTOR;
    //le pasamos como argumento la distancia inicial al centro (50cm)
+=======
+void actualizar_odometria()
+{
+    EventBits_t eventosMOTOR;
+    float rc0 = 50; //le pasamos como argumento la distancia inicial al centro (50cm)
+>>>>>>> b1c1bd5ab9cf4a224aad3cd25c3a19491aea60ce
     float angulo_izq_anterior = 0.0;
     float angulo_der_anterior = 0.0;
     float d_izq;
     float d_der;
     float d;
+<<<<<<< HEAD
 //    float delta_theta;
 //    float drc;
+=======
+    float delta_theta;
+    float drc;
+>>>>>>> b1c1bd5ab9cf4a224aad3cd25c3a19491aea60ce
     // Cambios en los ángulos
     float delta_angulo_izq;
     float delta_angulo_der;
@@ -169,8 +185,20 @@ void actualizar_odometria(float rc0)
 
 
      }
+<<<<<<< HEAD
 
      vTaskDelay(300);
+=======
+     if(angulo_der_mov >= 2.0 * M_PI)
+     {
+         angulo_der_mov=0.0;
+     }
+     if(angulo_izq_mov >= 2.0 * M_PI)
+     {
+         angulo_izq_mov=0.0;
+     }
+     vTaskDelay(750);
+>>>>>>> b1c1bd5ab9cf4a224aad3cd25c3a19491aea60ce
     delta_angulo_izq = angulo_izq_mov - angulo_izq_anterior;
     delta_angulo_der = angulo_der_mov - angulo_der_anterior;
     // Guardar los valores actuales como anteriores
@@ -183,6 +211,7 @@ void actualizar_odometria(float rc0)
 
     // Calcular desplazamiento y cambio en orientación
     d = (d_izq + d_der) / 2.0; //Velocidad lineal promedio
+<<<<<<< HEAD
     //delta_theta = (d_der - d_izq) / DIST_RUEDAS;//Velocidad angular del robot
 
 
@@ -197,6 +226,16 @@ void actualizar_odometria(float rc0)
         angulo_izq_mov=0;
     }
     //theta += delta_theta;//orientacion
+=======
+    delta_theta = (d_der - d_izq) / DIST_RUEDAS;//Velocidad angular del robot
+
+
+    // Cambio en la distancia radial
+    drc = d * cos(theta) ;
+    rc1 = rc0 + drc; // Actualización de la distancia radial
+
+    theta += delta_theta;//orientacion
+>>>>>>> b1c1bd5ab9cf4a224aad3cd25c3a19491aea60ce
     // Guardar el nuevo rc como estado inicial para la próxima iteración
      rc0 = rc1;
 }
@@ -355,8 +394,89 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
          //SysCtlDeepSleep();
  }
  //#endif
+<<<<<<< HEAD
 
 
+=======
+ static portTASK_FUNCTION(WHISKERTask,pvParameters)
+ {
+     EventBits_t eventosMOTOR;
+
+     while(1)
+     {
+         actualizar_odometria();
+         //mover_robot(10);
+         /*
+         eventosMOTOR = xEventGroupWaitBits(FlagsEventos,WHISKER,pdFALSE,pdFALSE,portMAX_DELAY);
+         xEventGroupClearBits(FlagsEventos,WHISKER);
+
+         if (eventosMOTOR & WHISKER)
+         {
+             xEventGroupClearBits(FlagsEventos,WHISKER);
+
+
+
+            PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+20);
+            PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, COUNT_1MS);//Esto es para que gire sobre
+
+            vTaskDelay(1000);
+
+            PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2);
+            PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT);
+
+         }
+*/
+         }
+
+
+    }
+
+
+ static portTASK_FUNCTION(SENSORLINEATask,pvParameters)
+ {
+     //NUESTRAS RUEDAS TIENEN 18 SECTORES, ENTONCES CADA VEZ QUE RECORRE UN SECTOR, RECORRE 20 GRADOS Y 0.98 cm
+     //0.98 cm se ha sacado de la formula de los apuntes, que es radio/2 * (angulo1 + andulo2), con los angulos en radianes y el radio en cm
+     //Comprobar si queremos ir hacia delante o hacia atras
+     EventBits_t eventosMOTOR;
+
+
+     while(1)
+     {
+
+
+         eventosMOTOR = xEventGroupWaitBits(FlagsEventos,INT_SENSOR_LINEA_DELANTE|INT_SENSOR_LINEA_ATRAS,pdFALSE,pdFALSE,portMAX_DELAY);
+         xEventGroupClearBits(FlagsEventos,INT_SENSOR_LINEA_DELANTE|INT_SENSOR_LINEA_ATRAS);
+
+
+
+         if (eventosMOTOR & INT_SENSOR_LINEA_DELANTE)
+         {
+             UARTprintf("SENSOR DELANTE\n");
+             OLED_sendStrXY("sensor alante", 1, 0);
+            // ft_putnbr(12346,0,0);
+             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2-20);
+             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+20);
+
+         }
+
+         if (eventosMOTOR & INT_SENSOR_LINEA_ATRAS)
+         {
+             UARTprintf("SENSOR ATRAS\n");
+//             OLED_sendStrXY("sensor atras", 1, 0);
+             //ft_putnbr(12346,0,0);
+             GPIOPinWrite(GPIO_PORTF_BASE,GPIO_PIN_1,GPIO_PIN_1);
+
+             GPIOPinWrite(GPIO_PORTF_BASE,GPIO_PIN_1,0);
+             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+20);
+             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT-20);
+         }
+
+
+    }
+
+
+ }
+>>>>>>> b1c1bd5ab9cf4a224aad3cd25c3a19491aea60ce
  static portTASK_FUNCTION(ADCTask,pvParameters)
  {
      MuestrasADC muestras;
@@ -561,8 +681,14 @@ int main(void){
 
     OLED_Init();
     OLED_clearDisplay();
+<<<<<<< HEAD
 
 
+=======
+    OLED_sendCharXY('#', 0, 0);
+    int Y = 0; // Columna inicial
+      int X = 0; // Fila inicial
+>>>>>>> b1c1bd5ab9cf4a224aad3cd25c3a19491aea60ce
 
 
 
@@ -620,7 +746,11 @@ int main(void){
          while(1);
      }
 
+<<<<<<< HEAD
 
+=======
+     ft_putnbr(12348,X,&Y);///
+>>>>>>> b1c1bd5ab9cf4a224aad3cd25c3a19491aea60ce
 
     vTaskStartScheduler();
 
