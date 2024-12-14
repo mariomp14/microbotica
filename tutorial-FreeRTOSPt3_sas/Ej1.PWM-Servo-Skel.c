@@ -49,17 +49,29 @@ static EventGroupHandle_t FlagsEventos;//flag de eventos
 #define INT_SENSOR_LINEA_ATRAS 0x10
 #define MOTOR_30KG_ENCENDER 0x20
 #define MOTOR_30KG_APAGAR 0x40
+#define INT_ENCODER_DER_MOV 0x80
+#define INT_ENCODER_IZQ_MOV 0x100
+#define INT_SENSOR_LINEA_ATRAS2 0x200
+#define ESQUIVAR 0x400
+//estado para la planificacion
+#define ESTADO_CENTRO 1
+#define ESTADO_BORDE 2
+#define ESTADO_ATAQUE 3
+#define ESTADO_BUSCAR_CENTRO 4
+#define ESQUIVO 5
 
-
+int estado_anterior = ESTADO_BUSCAR_CENTRO; //Se empieza en buscar centro
 //variables para controlar la distancia recorrida por el robot y el angulo de giro
 volatile float angulo_der = 0.0;
 volatile float angulo_izq = 0.0;
+volatile float angulo_der_mov = 0.0;
+volatile float angulo_izq_mov = 0.0;
 volatile float distancia_recorrida = 0.0;
 volatile float angulo_recorrido = 0.0;
-// Variables globales de posición
-float x = 0.0;
-float y = 0.0;
-float theta = 0.0; // Orientación en radianes
+// Variables globales de localización
+float rc1 = 0;
+float theta = 0;
+
 
 
 //PUERTOS USADOS, PARA SABERLO PARA FUTURAS IMPLEMENTACIONES
@@ -71,41 +83,124 @@ float theta = 0.0; // Orientación en radianes
 //PE4, PE1 --> SENSOR DE LINEA
 //PD0, PD1, PB6, PB7 --> I2C LCD
 
+
+/*Tarea planificadora : Le llegan interrupciones, de whisker, sensor de linea y odometria(pero no los encoders porque estan dentro de esa funcion)
+ * Estados --> Choca Sensor de linea de alante, Chocasolo derecho atras, solo izquierdo de atras y chocan los dos de atras.
+ *         -->Choque contra el whisker
+ *         --> Sensor de distancia detecta al otro(Activa el motor30kg y va a por el, hay que combinarlo con la odometria)
+ *Tarea Motores: Le llega lo que decida la planificadora, para mover los motores como mas convenga. Aqui no llegan interrupciones,
+ *               llegan otros flags, que estan por encima de los flags de interrrupciones.
+ *  Flags motores --> Recto, "sobre si mismo"(para esquivar), Giro para mirar al centro.
+ *
+ *Para que detecte los dos de linea traseros, lo suyo es cuando detecte uno, mover el robot dependiendo de cual toco y
+ * no limpiar el flag, hasta que se active el flag INT_SENSORES_LINEA_TRASEROS, para que cuando pille un solo sensor de linea trasero
+ *  se quede activo ese flag hasta que toque tambien el otro de linea y asi se activa el flag INT_SENSORES_LINEA_TRASEROS, que es una OR
+ *  de los dos, por lo tanto solo se activa cuando los bits de los dos sensores separados estan activos.
+ *
+ */
 //para look up table es para buscar mas rapido la distancia que esta leyendo el sensor en relacion al valor del ADC
 unsigned short B[8] = {40,35,30,25,20,15,10,5};
 unsigned short A[8] = {320,368,460,536,712,1073,1667,3457};
 
-void actualizar_odometria() {
-    static float angulo_izq_anterior = 0.0;
-    static float angulo_der_anterior = 0.0;
+void    ft_putchar_LCD(unsigned char data, int X, int Y)
+{
+    //write(1, &c, 1);
+    OLED_sendCharXY( data,  X,  Y);
+}
+
+void    ft_putnbr(int nb,int X, int *Y)
+{
+
+    if (nb < 0)
+    {
+        ft_putchar_LCD('-', X,(*Y)++);
+
+        if (nb == -2147483648)
+        {
+            ft_putchar_LCD('2',X,(*Y)++);
+
+            nb = 147483648;
+        }
+        else
+        {
+            nb = -nb;
+        }
+    }
+    if (nb >= 10)
+    {
+        ft_putnbr(nb / 10, X, Y);
+    }
+    ft_putchar_LCD ((nb % 10) + '0',X,(*Y)++);
+
+}
+void actualizar_odometria(float rc0)
+{
+    EventBits_t eventosMOTOR;
+   //le pasamos como argumento la distancia inicial al centro (50cm)
+    float angulo_izq_anterior = 0.0;
+    float angulo_der_anterior = 0.0;
     float d_izq;
     float d_der;
     float d;
-    float delta_theta;
+//    float delta_theta;
+//    float drc;
     // Cambios en los ángulos
-    float delta_angulo_izq = angulo_izq - angulo_izq_anterior;
-    float delta_angulo_der = angulo_der - angulo_der_anterior;
+    float delta_angulo_izq;
+    float delta_angulo_der;
 
+
+
+    eventosMOTOR = xEventGroupWaitBits(FlagsEventos, INT_ENCODER_DER_MOV | INT_ENCODER_IZQ_MOV, pdFALSE, pdFALSE, portMAX_DELAY);
+
+    if (eventosMOTOR & INT_ENCODER_DER_MOV) {
+         xEventGroupClearBits(FlagsEventos, INT_ENCODER_DER_MOV);
+
+         UARTprintf("INTERRUPCION ODOMETRIA DER\n");
+         angulo_der_mov = angulo_der_mov + 60.0 * (M_PI / 180.0); // Convertir 60 grados a radiane
+
+     }
+
+     // Actualización del ángulo izquierdo
+     if (eventosMOTOR & INT_ENCODER_IZQ_MOV) {
+         xEventGroupClearBits(FlagsEventos, INT_ENCODER_IZQ_MOV);
+
+         UARTprintf("INTERRUPCION ODOMETRIA IZQ\n");
+         angulo_izq_mov = angulo_izq_mov + 60.0 * (M_PI / 180.0); // Convertir 60 grados a radianes
+
+
+     }
+
+     vTaskDelay(300);
+    delta_angulo_izq = angulo_izq_mov - angulo_izq_anterior;
+    delta_angulo_der = angulo_der_mov - angulo_der_anterior;
     // Guardar los valores actuales como anteriores
-    angulo_izq_anterior = angulo_izq;
-    angulo_der_anterior = angulo_der;
+    angulo_izq_anterior = angulo_izq_mov;
+    angulo_der_anterior = angulo_der_mov;
 
     // Calcular desplazamientos lineales
-    d_izq = RADIO * delta_angulo_izq;
-    d_der = RADIO * delta_angulo_der;
+    d_izq = -RADIO * delta_angulo_izq;
+    d_der = -RADIO * delta_angulo_der;
 
     // Calcular desplazamiento y cambio en orientación
-    d = (d_izq + d_der) / 2.0;
-    delta_theta = (d_der - d_izq) / DIST_RUEDAS;
+    d = (d_izq + d_der) / 2.0; //Velocidad lineal promedio
+    //delta_theta = (d_der - d_izq) / DIST_RUEDAS;//Velocidad angular del robot
 
-    // Actualizar posición y orientación
-    theta += delta_theta;
-    x += d * cos(theta);
-    y += d * sin(theta);
 
-    // Imprimir la posición actual
-    UARTprintf("x: %d, y: %d, theta: %d\n", x, y, theta);
+    // Cambio en la distancia radial
+    //drc = d * cos(theta) ;
+    rc1 = rc0 + d; // Actualización de la distancia radial
+    if(rc1 <= 0)
+    {
+        estado_anterior = ESTADO_CENTRO;
+        rc1 = 0;
+        angulo_der_mov=0;
+        angulo_izq_mov=0;
+    }
+    //theta += delta_theta;//orientacion
+    // Guardar el nuevo rc como estado inicial para la próxima iteración
+     rc0 = rc1;
 }
+
 
 void mover_robot(float c) {
     EventBits_t eventosMOTOR;
@@ -130,7 +225,6 @@ void mover_robot(float c) {
 
                 UARTprintf("INTERRUPCION DER\n");
                 angulo_der = angulo_der + 60.0 * (M_PI / 180.0); // Convertir 20 grados a radiane
-                actualizar_odometria();
 
             }
 
@@ -140,7 +234,7 @@ void mover_robot(float c) {
 
                 UARTprintf("INTERRUPCION IZQ\n");
                 angulo_izq = angulo_izq + 60.0 * (M_PI / 180.0); // Convertir 20 grados a radianes
-                actualizar_odometria();
+
 
             }
 
@@ -222,40 +316,7 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
 }
 
 
-/*
-typedef struct {
-    float x;  // Posición X
-    float y;  // Posición Y
-    float theta;  // Orientación
-} RobotPose;
 
-RobotPose pose = {0.0, 0.0, 0.0};
-float wheel_radius = 0.028;  // Radio de las ruedas (metros)
-float wheel_base = 0.095;     // Distancia entre ruedas (metros)
-
-
-    float vL = (ticks_left / ticks_per_revolution) * (2 * M_PI * wheel_radius);
-    float vR = (ticks_right / ticks_per_revolution) * (2 * M_PI * wheel_radius);
-
-            o
-
-    float vL = (angulo_izq * wheel_radius);
-    float vR = (angulo_der * wheel_radius);
-    float v = (vL + vR) / 2.0;
-    float omega = (vR - vL) / wheel_base;
-
-    // Actualizar la posición
-    pose.x += v * cos(pose.theta) * 0.1;
-    pose.y += v * sin(pose.theta) * 0.1;
-    pose.theta += omega * 0.1;
-
-    // Normalizar theta entre -pi y pi
-    if (pose.theta > M_PI) pose.theta -= 2 * M_PI;
-    if (pose.theta < -M_PI) pose.theta += 2 * M_PI;
-
-    vTaskDelay(100); //Esto lo hago para que en la tarea, dentro del while(1), se sepa cual es la diferencia de tiempo entre ejecuciones, osea el incremento de t.
-
-*/
  //*****************************************************************************
  //
  // The error routine that is called if the driver library encounters an error.
@@ -294,142 +355,202 @@ float wheel_base = 0.095;     // Distancia entre ruedas (metros)
          //SysCtlDeepSleep();
  }
  //#endif
- static portTASK_FUNCTION(WHISKERTask,pvParameters)
- {
-     EventBits_t eventosMOTOR;
-
-     while(1)
-     {
-         eventosMOTOR = xEventGroupWaitBits(FlagsEventos,WHISKER,pdFALSE,pdFALSE,portMAX_DELAY);
-         xEventGroupClearBits(FlagsEventos,WHISKER);
-         if (eventosMOTOR & WHISKER)
-         {
-             xEventGroupClearBits(FlagsEventos,WHISKER);
 
 
-/*
-            PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+20);
-            PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, COUNT_1MS);//Esto es para que gire sobre
-
-            vTaskDelay(1000);
-
-            PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2);
-            PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT);
-            */
-         }
-
-         }
-
-
-    }
-
-
- static portTASK_FUNCTION(SENSORLINEATask,pvParameters)
- {
-     //NUESTRAS RUEDAS TIENEN 18 SECTORES, ENTONCES CADA VEZ QUE RECORRE UN SECTOR, RECORRE 20 GRADOS Y 0.98 cm
-     //0.98 cm se ha sacado de la formula de los apuntes, que es radio/2 * (angulo1 + andulo2), con los angulos en radianes y el radio en cm
-     //Comprobar si queremos ir hacia delante o hacia atras
-     EventBits_t eventosMOTOR;
-
-
-     while(1)
-     {
-
-
-         eventosMOTOR = xEventGroupWaitBits(FlagsEventos,INT_SENSOR_LINEA_DELANTE|INT_SENSOR_LINEA_ATRAS,pdFALSE,pdFALSE,portMAX_DELAY);
-         xEventGroupClearBits(FlagsEventos,INT_SENSOR_LINEA_DELANTE|INT_SENSOR_LINEA_ATRAS);
-
-
-
-         if (eventosMOTOR & INT_SENSOR_LINEA_DELANTE)
-         {
-             UARTprintf("SENSOR DELANTE\n");
-             OLED_sendStrXY("sensor alante", 1, 0);
-             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2-50);
-             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+50);
-
-         }
-
-         if (eventosMOTOR & INT_SENSOR_LINEA_ATRAS)
-         {
-             UARTprintf("SENSOR ATRAS\n");
-             OLED_sendStrXY("sensor atras", 1, 0);
-             GPIOPinWrite(GPIO_PORTF_BASE,GPIO_PIN_1,GPIO_PIN_1);
-
-             GPIOPinWrite(GPIO_PORTF_BASE,GPIO_PIN_1,0);
-             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+50);
-             PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT-50);
-         }
-
-
-    }
-
-
- }
  static portTASK_FUNCTION(ADCTask,pvParameters)
  {
      MuestrasADC muestras;
      unsigned short index;
+
 
      while(1)
      {
 
          configADC_LeeADC(&muestras); //Espera y lee muestras del ADC (BLOQUEANTE)
 
-          UARTprintf("ADC : %d\n",muestras.chan1);
+         UARTprintf("ADC : %d\n",muestras.chan1);
+
+         //OLED_clearDisplay();
+         //ft_putnbr(muestras.chan1,X,&Y);
 
          index = binary_lookup(A,muestras.chan1,0,7);
 
          UARTprintf("INDICE : %d\n", index);
 
-
-         if(B[index] <= B[6])
+         UARTprintf("sas con sus : %d\n", B[index]);
+         if(B[index] <= B[4])
            {
-             //xEventGroupSetBits(FlagsEventos, MOTOR_30KG_ENCENDER);
+             xEventGroupSetBits(FlagsEventos, MOTOR_30KG_ENCENDER);
            }
          else
          {
              xEventGroupSetBits(FlagsEventos, MOTOR_30KG_APAGAR);
          }
-
+         if(B[index] < B[6])
+           {
+             xEventGroupSetBits(FlagsEventos, ESQUIVAR);
+           }
     }
 
 
  }
- static portTASK_FUNCTION(MOTOR30KGTask,pvParameters)
- {
-
+ static portTASK_FUNCTION(PRINCIPALTask, pvParameters) {
      EventBits_t eventosMOTOR;
-     while(1)
-     {
 
-         eventosMOTOR = xEventGroupWaitBits(FlagsEventos,MOTOR_30KG_ENCENDER|MOTOR_30KG_APAGAR,pdFALSE,pdFALSE,portMAX_DELAY);
-         xEventGroupClearBits(FlagsEventos,MOTOR_30KG_ENCENDER|MOTOR_30KG_APAGAR);
+     while (1) {
+         // Esperar por cualquier evento relevante
+         eventosMOTOR = xEventGroupWaitBits(FlagsEventos,ESQUIVAR|WHISKER|MOTOR_30KG_ENCENDER|MOTOR_30KG_APAGAR,pdFALSE,pdFALSE,portMAX_DELAY);
+
+         xEventGroupClearBits(FlagsEventos,ESQUIVAR|MOTOR_30KG_ENCENDER|MOTOR_30KG_APAGAR|WHISKER);
 
 
-         if (eventosMOTOR & MOTOR_30KG_ENCENDER)
-         {
-             OLED_sendStrXY("ACTIVO_30KG", 1, 0);
-         PWMPulseWidthSet(PWM0_BASE, PWM_OUT_6, COUNT_1MS-400);
-         vTaskDelay(1000);
-         PWMPulseWidthSet(PWM0_BASE, PWM_OUT_6, COUNT_2MS+400);
-         vTaskDelay(1000);
+         // Evaluar los eventos recibidos usando switch-case
+         switch (estado_anterior) {
+             case ESTADO_CENTRO:
+                 OLED_clearDisplay();
+                 OLED_sendStrXY("CENTRO CHILL", 1, 0);
+                 UARTprintf("CENTRO CHILL\n");
+                 PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+15);
+                 PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+15);
+                 if(eventosMOTOR & MOTOR_30KG_ENCENDER)
+                 {
+                     estado_anterior = ESTADO_ATAQUE;
+                 }
+                 /*
+                 if(eventosMOTOR & WHISKER)
+                 {
+                     estado_anterior = ESTADO_ATAQUE_VUELTA;
+                 }
+                 */
+                 break;
+
+             case ESTADO_BORDE:                 //Este estado es para que cuando toque borde, este aqui , este estado como tal no hace nada, es solo para cuando la otra tarea
+                 OLED_clearDisplay();           //detecte que este en el borde, se quede aqui sin hacer nada y la otra tarea sea la prioridad.Hasta que los dos sensores traseros
+                 OLED_sendStrXY("BORDE", 1, 0); //toquen la linea blanca, no se cambia de estado.
+                 UARTprintf("BORDE\n");
+
+                 break;
+
+             case ESTADO_ATAQUE:
+                 OLED_clearDisplay();
+                 OLED_sendStrXY("ATACO", 1, 0);
+                 PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT-80);
+                 PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+80);
+
+                 PWMPulseWidthSet(PWM0_BASE, PWM_OUT_6, COUNT_1MS-400);
+                 vTaskDelay(1000);
+                 PWMPulseWidthSet(PWM0_BASE, PWM_OUT_6, COUNT_2MS+400);
+                 vTaskDelay(1000);
+
+                 if(eventosMOTOR & MOTOR_30KG_APAGAR)
+                 {
+                     PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT-30);
+                     PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+30);
+                     PWMPulseWidthSet(PWM0_BASE, PWM_OUT_6, STOPCOUNT);
+                 }
+
+                 break;
+
+             case ESTADO_BUSCAR_CENTRO:
+
+                 OLED_clearDisplay();
+                 OLED_sendStrXY("BUSCO CENTRO", 1, 0);
+                 UARTprintf("BUSCO CENTRO\n");
+                 PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT - 20);
+                 PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2 + 20);
+                 //actualizar_odometria(44);
+                 actualizar_odometria(15);
+
+                 if(eventosMOTOR & ESQUIVAR)
+                 {
+                  estado_anterior = ESQUIVO;
+                 }
+
+                 break;
+             case ESQUIVO:
+
+                 OLED_clearDisplay();
+                 OLED_sendStrXY("ESQUIVO", 1, 0);
+                 UARTprintf("ESQUIVO\n");
+                 PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+20); //Giro sobre si mismo 1 segundo y luego me voy a buscar borde para volver al centro
+                 PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+20);
+
+                 vTaskDelay(2000);
+
+                 PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT - 30);
+                 PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2 + 30);
+
+                 vTaskDelay(4000);
+                 break;
+
+             default:
+                 OLED_clearDisplay();
+                 OLED_sendStrXY("No detecto estados", 1, 0);
+                 break;
          }
-         if(eventosMOTOR & MOTOR_30KG_APAGAR)
-         {
-             OLED_sendStrXY("DESACTIVO_30KG", 1, 0);
-             PWMPulseWidthSet(PWM0_BASE, PWM_OUT_6, STOPCOUNT);
-         }
+
+         vTaskDelay(100);
+     }
+ }
+ static portTASK_FUNCTION(MOTORESTask,pvParameters)
+  {
+     EventBits_t eventosMOTOR;
+      while(1)
+      {
+
+          eventosMOTOR = xEventGroupWaitBits(FlagsEventos,INT_SENSOR_LINEA_DELANTE|INT_SENSOR_LINEA_ATRAS|INT_SENSOR_LINEA_ATRAS2,pdFALSE,pdFALSE,portMAX_DELAY);
+
+          xEventGroupClearBits(FlagsEventos,INT_SENSOR_LINEA_DELANTE);
+
+          if(eventosMOTOR & INT_SENSOR_LINEA_DELANTE)
+          {
+              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+15);
+              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+15);
+              estado_anterior = ESTADO_BORDE;
+          }
+          if((eventosMOTOR & INT_SENSOR_LINEA_ATRAS) && (eventosMOTOR & INT_SENSOR_LINEA_ATRAS2))
+          {
+              xEventGroupClearBits(FlagsEventos,INT_SENSOR_LINEA_ATRAS|INT_SENSOR_LINEA_ATRAS2);
+              UARTprintf("TOCAN LOS DOS DE ATRAS\n");
+              estado_anterior = ESTADO_BUSCAR_CENTRO;
+          }
+          if((eventosMOTOR & INT_SENSOR_LINEA_ATRAS) && !(eventosMOTOR & INT_SENSOR_LINEA_ATRAS2))
+          {
+              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT);
+              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2-10);
+              estado_anterior = ESTADO_BORDE;
+          }
+          if((eventosMOTOR & INT_SENSOR_LINEA_ATRAS2) && !(eventosMOTOR & INT_SENSOR_LINEA_ATRAS))
+          {
+              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+10);
+              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2);
+              estado_anterior = ESTADO_BORDE;
+          }
+
+     }
 
 
-    }
+  }
 
+ /*
+  * ESTO ES PARA EL WHISKER
+ if (eventosMOTOR & WHISKER)
+ {
+     xEventGroupClearBits(FlagsEventos,WHISKER);
+
+
+
+    PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+20);
+    PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, COUNT_1MS);//Esto es para que gire sobre
+
+    vTaskDelay(1000);
+
+    PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2);
+    PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT);
 
  }
-
-
-
- int main(void){
+ */
+int main(void){
 
 
     // Variables para el numero de ciclos de reloj para el periodo(20ms) y el ciclo de trabajo(entre  1y2 ms)
@@ -440,7 +561,9 @@ float wheel_base = 0.095;     // Distancia entre ruedas (metros)
 
     OLED_Init();
     OLED_clearDisplay();
-    OLED_sendCharXY('#', 0, 0);
+
+
+
 
 
             // Configura pulsadores placa TIVA (int. por flanco de bajada)
@@ -457,10 +580,10 @@ float wheel_base = 0.095;     // Distancia entre ruedas (metros)
     SysCtlPeripheralSleepEnable(SYSCTL_PERIPH_UART0);
     configADC_IniciaADC();
 
-    GPIOPadConfigSet(GPIO_PORTE_BASE, GPIO_PIN_5|GPIO_PIN_2|GPIO_PIN_4|GPIO_PIN_1, GPIO_STRENGTH_2MA,  GPIO_PIN_TYPE_STD); //desactivo pullup y pulldown
+    GPIOPadConfigSet(GPIO_PORTE_BASE, GPIO_PIN_5|GPIO_PIN_2|GPIO_PIN_4|GPIO_PIN_1|GPIO_PIN_0, GPIO_STRENGTH_2MA,  GPIO_PIN_TYPE_STD); //desactivo pullup y pulldown
     GPIOIntTypeSet(GPIO_PORTE_BASE, GPIO_PIN_5|GPIO_PIN_2, GPIO_RISING_EDGE);
-    GPIOIntTypeSet(GPIO_PORTE_BASE, GPIO_PIN_4|GPIO_PIN_1, GPIO_RISING_EDGE);
-    GPIOIntEnable(GPIO_PORTE_BASE, GPIO_PIN_5|GPIO_PIN_2|GPIO_PIN_4|GPIO_PIN_1);
+    GPIOIntTypeSet(GPIO_PORTE_BASE, GPIO_PIN_4|GPIO_PIN_1|GPIO_PIN_0, GPIO_RISING_EDGE);
+    GPIOIntEnable(GPIO_PORTE_BASE, GPIO_PIN_5|GPIO_PIN_2|GPIO_PIN_4|GPIO_PIN_1|GPIO_PIN_0);
     IntEnable(INT_GPIOE);
 
     GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE,GPIO_PIN_1);
@@ -471,25 +594,21 @@ float wheel_base = 0.095;     // Distancia entre ruedas (metros)
     MAP_IntEnable(INT_GPIOF);
 
 
-    if((xTaskCreate(WHISKERTask, "WHISKER", TASKSTACKSIZE, NULL,tskIDLE_PRIORITY + TASKPRIO, NULL) != pdTRUE))
-        {
-            while(1)
-            {
-            }
-        }
-    if((xTaskCreate(SENSORLINEATask, "SENSORLINEA", TASKSTACKSIZE, NULL,tskIDLE_PRIORITY + TASKPRIO, NULL) != pdTRUE))
-        {
-            while(1)
-            {
-            }
-        }
+
+
     if((xTaskCreate(ADCTask, "ADC", TASKSTACKSIZE, NULL,tskIDLE_PRIORITY + TASKPRIO, NULL) != pdTRUE))
         {
             while(1)
             {
             }
         }
-    if((xTaskCreate(MOTOR30KGTask, "30KG", TASKSTACKSIZE, NULL,tskIDLE_PRIORITY + TASKPRIO, NULL) != pdTRUE))
+    if((xTaskCreate(PRINCIPALTask, "PRINCIPAL", TASKSTACKSIZE, NULL,tskIDLE_PRIORITY + TASKPRIO, NULL) != pdTRUE))
+        {
+            while(1)
+            {
+            }
+        }
+    if((xTaskCreate(MOTORESTask, "MOTORES", TASKSTACKSIZE, NULL,tskIDLE_PRIORITY + TASKPRIO, NULL) != pdTRUE))
         {
             while(1)
             {
@@ -500,6 +619,8 @@ float wheel_base = 0.095;     // Distancia entre ruedas (metros)
      {
          while(1);
      }
+
+
 
     vTaskStartScheduler();
 
@@ -514,7 +635,7 @@ void GPIOFIntHandler(void)
 
     BaseType_t higherPriorityTaskWoken=pdFALSE;
     int32_t i32Status = GPIOIntStatus(GPIO_PORTF_BASE,ALL_BUTTONS);
-    int32_t i32Status2 = GPIOIntStatus(GPIO_PORTE_BASE,GPIO_PIN_5|GPIO_PIN_2|GPIO_PIN_4|GPIO_PIN_1);
+    int32_t i32Status2 = GPIOIntStatus(GPIO_PORTE_BASE,GPIO_PIN_5|GPIO_PIN_2|GPIO_PIN_4|GPIO_PIN_1|GPIO_PIN_0);
 
 
     static TickType_t last_time_left=0;
@@ -525,7 +646,8 @@ void GPIOFIntHandler(void)
     TickType_t current_time_linea;
     static TickType_t last_time_lineatras=0;
     TickType_t current_time_lineatras;
-
+    static TickType_t last_time_lineatras2=0;
+    TickType_t current_time_lineatras2;
     if(((i32Status & LEFT_BUTTON) == LEFT_BUTTON)){//Whisker
 
         xEventGroupSetBitsFromISR(FlagsEventos, WHISKER,&higherPriorityTaskWoken);
@@ -538,6 +660,7 @@ void GPIOFIntHandler(void)
         if((current_time_left-last_time_left)>=(0.35*configTICK_RATE_HZ))//anitrrebotes?
         {
             xEventGroupSetBitsFromISR(FlagsEventos, INT_ENCODER_DER,&higherPriorityTaskWoken);
+            xEventGroupSetBitsFromISR(FlagsEventos, INT_ENCODER_DER_MOV,&higherPriorityTaskWoken);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_IZQ);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_SENSOR_LINEA_DELANTE);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_SENSOR_LINEA_ATRAS);
@@ -553,6 +676,7 @@ void GPIOFIntHandler(void)
         if((current_time_right-last_time_right)>=(0.35*configTICK_RATE_HZ)){
 
             xEventGroupSetBitsFromISR(FlagsEventos, INT_ENCODER_IZQ,&higherPriorityTaskWoken);
+            xEventGroupSetBitsFromISR(FlagsEventos, INT_ENCODER_IZQ_MOV,&higherPriorityTaskWoken);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_DER);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_SENSOR_LINEA_DELANTE);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_SENSOR_LINEA_ATRAS);
@@ -569,8 +693,10 @@ void GPIOFIntHandler(void)
 
             xEventGroupSetBitsFromISR(FlagsEventos, INT_SENSOR_LINEA_DELANTE,&higherPriorityTaskWoken);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_DER);
+            xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_DER_MOV);
+            xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_IZQ_MOV);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_IZQ);
-            xEventGroupClearBitsFromISR(FlagsEventos,INT_SENSOR_LINEA_ATRAS);
+
 
 
         }
@@ -585,6 +711,8 @@ void GPIOFIntHandler(void)
             xEventGroupSetBitsFromISR(FlagsEventos, INT_SENSOR_LINEA_ATRAS,&higherPriorityTaskWoken);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_DER);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_IZQ);
+            xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_DER_MOV);
+            xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_IZQ_MOV);
             xEventGroupClearBitsFromISR(FlagsEventos,INT_SENSOR_LINEA_DELANTE);
 
 
@@ -592,12 +720,30 @@ void GPIOFIntHandler(void)
         last_time_lineatras=current_time_lineatras;
 
     }
+    if(((i32Status2 & GPIO_PIN_0) == GPIO_PIN_0))
+    {
+        current_time_lineatras2= xTaskGetTickCountFromISR();
+        if((current_time_lineatras2-last_time_lineatras2)>=(0.35*configTICK_RATE_HZ)){
+
+            xEventGroupSetBitsFromISR(FlagsEventos, INT_SENSOR_LINEA_ATRAS2,&higherPriorityTaskWoken);
+            xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_DER);
+            xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_IZQ);
+            xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_DER_MOV);
+            xEventGroupClearBitsFromISR(FlagsEventos,INT_ENCODER_IZQ_MOV);
+            xEventGroupClearBitsFromISR(FlagsEventos,INT_SENSOR_LINEA_DELANTE);
+
+
+
+        }
+        last_time_lineatras2=current_time_lineatras2;
+
+    }
 //        xEventGroupSetBitsFromISR(FlagsEventos, INT_ENCODER,higherPriorityTaskWoken);
 
 
 
     portEND_SWITCHING_ISR(higherPriorityTaskWoken);
-    GPIOIntClear(GPIO_PORTE_BASE, GPIO_PIN_5|GPIO_PIN_2|GPIO_PIN_4|GPIO_PIN_1);
+    GPIOIntClear(GPIO_PORTE_BASE, GPIO_PIN_5|GPIO_PIN_2|GPIO_PIN_4|GPIO_PIN_1|GPIO_PIN_0);
     GPIOIntClear(GPIO_PORTF_BASE,ALL_BUTTONS);  //limpiamos flags
 }
 

@@ -97,6 +97,7 @@ void OLED_clearDisplay(void)
   }
 }
 
+
 void OLED_sendChar(unsigned char data){
   char arr[2] = {0x40, data};
   I2C_sendMultipleBytes(slaveAddress, 2, arr);
