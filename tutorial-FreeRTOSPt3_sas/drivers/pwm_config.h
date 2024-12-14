@@ -14,11 +14,7 @@
 #define PERIOD_PWM 12500    // TODO: Ciclos de reloj para conseguir una señal periódica de 50Hz (según reloj de periférico usado)
 //Lo mismo que el de arriba pero para 1 ms(frecuencia para velocidad maxima para una rueda, las dos ruedas van en sentido contrario)
 #define COUNT_1MS 625   // TODO: Ciclos para amplitud de pulso de 1ms (max velocidad en un sentido)
-<<<<<<< HEAD
 #define STOPCOUNT 965  // TODO: Ciclos para amplitud de pulso de parada (1.52ms) // El valor del motor izquierdo es 962 para que este neutro y 966 para el derecho.
-=======
-#define STOPCOUNT 969  // TODO: Ciclos para amplitud de pulso de parada (1.52ms) // El valor del motor izquierdo es 962 para que este neutro y 966 para el derecho.
->>>>>>> b1c1bd5ab9cf4a224aad3cd25c3a19491aea60ce
 #define STOPCOUNT2 966
 #define COUNT_2MS 1250   // TODO: Ciclos para amplitud de pulso de 2ms (max velocidad en el otro sentido)
 
