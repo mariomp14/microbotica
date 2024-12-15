@@ -22,6 +22,7 @@
 #include "inc/hw_ints.h" // Definiciones de interrupciones
 #include "utils/cmdline.h"
 #include "utils/uartstdio.h"
+#include "driverlib/uart.h"
 #include "FreeRTOS.h"            // FreeRTOS: definiciones generales
 #include "task.h"
 #include "event_groups.h"//necesario para utilizar flags de eventos
@@ -32,6 +33,7 @@
 
 #include "drivers/i2c.h"
 #include "drivers/ssd1306.h"
+#include "drivers/DFplayer.h"
 
 #define RADIO_MITAD 1.4 //radio de las ruedas
 #define RADIO 2.8 //radio de las ruedas
@@ -44,7 +46,8 @@
 
 #define TASKSTACKSIZE 128
 
-static EventGroupHandle_t FlagsEventos;//flag de eventos
+static EventGroupHandle_t FlagsEventos;
+
 #define WHISKER 0x01  //(1<<0) // 0x0001
 #define INT_ENCODER_DER 0x02  //(1<<0) // 0x0001
 #define INT_ENCODER_IZQ 0x04  //(1<<0) // 0x0001
@@ -56,6 +59,7 @@ static EventGroupHandle_t FlagsEventos;//flag de eventos
 #define INT_ENCODER_IZQ_MOV 0x100
 #define INT_SENSOR_LINEA_ATRAS2 0x200
 #define ESQUIVAR 0x400
+
 //estado para la planificacion
 #define ESTADO_CENTRO 1
 #define ESTADO_BORDE 2
@@ -63,9 +67,10 @@ static EventGroupHandle_t FlagsEventos;//flag de eventos
 #define ESTADO_BUSCAR_CENTRO 4
 #define ESTADO_ESQUIVO 5
 #define ESTADO_WHISKER_ATAQUE 6
+#define ESTADO_WHISKER_ATRAS 7
 
 int estado = ESTADO_BUSCAR_CENTRO; //Se empieza en buscar centro
-int estado_anterior_LCD = -1;
+int estado_anterior = -1;
 //variables para controlar la distancia recorrida por el robot y el angulo de giro
 volatile float angulo_der = 0.0;
 volatile float angulo_izq = 0.0;
@@ -138,20 +143,21 @@ void    ft_putnbr(int nb,int X, int *Y)
     ft_putchar_LCD ((nb % 10) + '0',X,(*Y)++);
 
 }
-void actualizar_odometria(float rc0)
+void actualizar_odometria()
 {
     EventBits_t eventosMOTOR;
    //le pasamos como argumento la distancia inicial al centro (50cm)
-    float angulo_izq_anterior = 0.0;
-    float angulo_der_anterior = 0.0;
+//    float angulo_izq_anterior = 0.0;
+//    float angulo_der_anterior = 0.0;
     float d_izq;
     float d_der;
     float d;
+    float rc0 = 40;
 //    float delta_theta;
 //    float drc;
     // Cambios en los ángulos
-    float delta_angulo_izq;
-    float delta_angulo_der;
+//    float delta_angulo_izq;
+//    float delta_angulo_der;
 
 
 
@@ -162,7 +168,6 @@ void actualizar_odometria(float rc0)
 
          UARTprintf("INTERRUPCION ODOMETRIA DER\n");
          angulo_der_mov = angulo_der_mov + 60.0 * (M_PI / 180.0); // Convertir 60 grados a radiane
-
      }
 
      // Actualización del ángulo izquierdo
@@ -171,28 +176,25 @@ void actualizar_odometria(float rc0)
 
          UARTprintf("INTERRUPCION ODOMETRIA IZQ\n");
          angulo_izq_mov = angulo_izq_mov + 60.0 * (M_PI / 180.0); // Convertir 60 grados a radianes
-
-
      }
 
      vTaskDelay(300);
-    delta_angulo_izq = angulo_izq_mov - angulo_izq_anterior;
-    delta_angulo_der = angulo_der_mov - angulo_der_anterior;
+//    delta_angulo_izq = angulo_izq_mov - angulo_izq_anterior;
+//    delta_angulo_der = angulo_der_mov - angulo_der_anterior;
     // Guardar los valores actuales como anteriores
-    angulo_izq_anterior = angulo_izq_mov;
-    angulo_der_anterior = angulo_der_mov;
+//    angulo_izq_anterior = angulo_izq_mov;
+//    angulo_der_anterior = angulo_der_mov;
 
     // Calcular desplazamientos lineales
-    d_izq = -RADIO * delta_angulo_izq;
-    d_der = -RADIO * delta_angulo_der;
+    //d_izq = -RADIO * delta_angulo_izq;
+   // d_der = -RADIO * delta_angulo_der;
 
+    d_izq = -RADIO * angulo_izq_mov;
+    d_der = -RADIO * angulo_der_mov;
     // Calcular desplazamiento y cambio en orientación
     d = (d_izq + d_der) / 2.0; //Velocidad lineal promedio
-    //delta_theta = (d_der - d_izq) / DIST_RUEDAS;//Velocidad angular del robot
+//    d = d_der;
 
-
-    // Cambio en la distancia radial
-    //drc = d * cos(theta) ;
     rc1 = rc0 + d; // Actualización de la distancia radial
     if(rc1 <= 0)
     {
@@ -200,8 +202,8 @@ void actualizar_odometria(float rc0)
         rc1 = 0;
         angulo_der_mov=0;
         angulo_izq_mov=0;
+        rc0=40;
     }
-    //theta += delta_theta;//orientacion
     // Guardar el nuevo rc como estado inicial para la próxima iteración
      rc0 = rc1;
 }
@@ -402,8 +404,6 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
  static portTASK_FUNCTION(PRINCIPALTask, pvParameters) {
      EventBits_t eventosMOTOR;
 
-
-
      while (1) {
          // Esperar por cualquier evento relevante
          eventosMOTOR = xEventGroupWaitBits(FlagsEventos,ESQUIVAR|WHISKER|MOTOR_30KG_ENCENDER|MOTOR_30KG_APAGAR,pdFALSE,pdFALSE,portMAX_DELAY);
@@ -415,10 +415,10 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
          switch (estado) {
              case ESTADO_CENTRO:
 
-                 if (estado_anterior_LCD != ESTADO_CENTRO) {
+                 if (estado_anterior != ESTADO_CENTRO) {
                      OLED_clearDisplay();
                      OLED_sendStrXY("CENTRO CHILL", 1, 0);
-                     estado_anterior_LCD = ESTADO_CENTRO; // Actualiza el indicador
+                     estado_anterior = ESTADO_CENTRO; // Actualiza el indicador
 
                      PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+15);
                      PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+15);
@@ -439,19 +439,23 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
              case ESTADO_BORDE:                 //Este estado es para que cuando toque borde, este aqui , este estado como tal no hace nada, es solo para cuando la otra tarea
                                                //detecte que este en el borde, se quede aqui sin hacer nada y la otra tarea sea la prioridad.Hasta que los dos sensores traseros
                                                   //toquen la linea blanca, no se cambia de estado.
-                if (estado_anterior_LCD != ESTADO_BORDE) {
+                if (estado_anterior != ESTADO_BORDE) {
                      OLED_clearDisplay();
                      OLED_sendStrXY("BORDE", 1, 0);
-                     estado_anterior_LCD = ESTADO_BORDE;
+                     estado_anterior = ESTADO_BORDE;
                  }
+                if(eventosMOTOR & WHISKER)
+                {
+                    estado = ESTADO_WHISKER_ATRAS;
+                }
                  break;
 
              case ESTADO_ATAQUE:
 
-                 if (estado_anterior_LCD != ESTADO_ATAQUE) {
+                 if (estado_anterior != ESTADO_ATAQUE) {
                      OLED_clearDisplay();
                      OLED_sendStrXY("ATACO", 1, 0);
-                     estado_anterior_LCD = ESTADO_ATAQUE;
+                     estado_anterior = ESTADO_ATAQUE;
 
                      PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT-80);
                      PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+80);
@@ -473,16 +477,16 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
 
              case ESTADO_BUSCAR_CENTRO:
 
-                 if (estado_anterior_LCD != ESTADO_BUSCAR_CENTRO) {
+                 if (estado_anterior != ESTADO_BUSCAR_CENTRO) {
                      OLED_clearDisplay();
                      OLED_sendStrXY("BUSCO CENTRO", 1, 0);
-                     estado_anterior_LCD = ESTADO_BUSCAR_CENTRO;
+                     estado_anterior = ESTADO_BUSCAR_CENTRO;
 
                      PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT - 20);
                      PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2 + 20);
                  }
 
-                 actualizar_odometria(15);
+                 actualizar_odometria();
 
                  if(eventosMOTOR & ESQUIVAR)
                  {
@@ -496,10 +500,10 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
                  break;
              case ESTADO_ESQUIVO:
 
-                 if (estado_anterior_LCD != ESTADO_ESQUIVO) {
+                 if (estado_anterior != ESTADO_ESQUIVO) {
                       OLED_clearDisplay();
                       OLED_sendStrXY("ESQUIVO", 1, 0);
-                      estado_anterior_LCD = ESTADO_ESQUIVO;
+                      estado_anterior = ESTADO_ESQUIVO;
 
                       PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+20); //Giro sobre si mismo 1 segundo y luego me voy a buscar borde para volver al centro
                       PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+20);
@@ -514,10 +518,10 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
                  break;
              case ESTADO_WHISKER_ATAQUE:    //Giro sobre si mismo 2 segundo mientras pego con el motor de 30kg y me voy recto
 
-                 if (estado_anterior_LCD != ESTADO_WHISKER_ATAQUE) {
+                 if (estado_anterior != ESTADO_WHISKER_ATAQUE) {
                       OLED_clearDisplay();
                       OLED_sendStrXY("WHISKER ATACO", 1, 0);
-                      estado_anterior_LCD = ESTADO_WHISKER_ATAQUE;
+                      estado_anterior = ESTADO_WHISKER_ATAQUE;
 
                       PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+20);
                       PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+20);
@@ -532,6 +536,17 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
                  PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT - 30);
                  PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2 + 30);
 
+                 break;
+             case ESTADO_WHISKER_ATRAS:    //Giro sobre si mismo 2 segundo mientras pego con el motor de 30kg y me voy recto
+
+                 if (estado_anterior != ESTADO_WHISKER_ATRAS) {
+                      OLED_clearDisplay();
+                      OLED_sendStrXY("WHISKER ATRAS", 1, 0);
+                      estado_anterior = ESTADO_WHISKER_ATRAS;
+
+                      PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT + 30);
+                      PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2 - 30);
+                  }
                  break;
 
              default:
@@ -570,15 +585,12 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
               PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT);
               PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2-10);
               estado = ESTADO_BORDE;
-
-
           }
           if((eventosMOTOR & INT_SENSOR_LINEA_ATRAS2) && !(eventosMOTOR & INT_SENSOR_LINEA_ATRAS))
           {
               PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+10);
               PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2);
               estado = ESTADO_BORDE;
-
           }
 
      }
@@ -588,7 +600,9 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
 
 
 
- int main(void){
+
+
+int main(void){
 
 
     // Variables para el numero de ciclos de reloj para el periodo(20ms) y el ciclo de trabajo(entre  1y2 ms)
@@ -607,6 +621,16 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
     GPIOPinConfigure(GPIO_PA1_U0TX);
     GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
 
+
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_UART3);
+    SysCtlPeripheralSleepEnable(SYSCTL_PERIPH_UART3);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOC);
+    GPIOPinConfigure(GPIO_PC6_U3RX);
+    GPIOPinConfigure(GPIO_PC7_U3TX);
+    GPIOPinTypeUART(GPIO_PORTC_BASE, GPIO_PIN_6 | GPIO_PIN_7);
+
+    UARTConfigSetExpClk(UART3_BASE, SysCtlClockGet(), 9600,
+                         (UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE | UART_CONFIG_PAR_NONE));
 
 
     //Esta funcion habilita la interrupcion de la UART y le da la prioridad adecuada si esta activado el soporte para FreeRTOS
@@ -628,6 +652,19 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
     MAP_IntEnable(INT_GPIOF);
 
 
+    DFPlayer_Init();
+
+       // Configurar el volumen al 50%
+       DFPlayer_SetVolume(15);
+
+       // Reproducir la pista 1
+       DFPlayer_PlayTrack(1);
+
+       // Esperar un rato antes de detener la pista
+       SysCtlDelay(SysCtlClockGet() / 3); // Aproximadamente 1 segundo
+
+       // Detener la pista
+       DFPlayer_Stop();
 
 
     if((xTaskCreate(ADCTask, "ADC", TASKSTACKSIZE, NULL,tskIDLE_PRIORITY + TASKPRIO_ADC, NULL) != pdTRUE))
@@ -648,12 +685,12 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
             {
             }
         }
+
     FlagsEventos = xEventGroupCreate();
      if( FlagsEventos == NULL )
      {
          while(1);
      }
-
 
 
     vTaskStartScheduler();
