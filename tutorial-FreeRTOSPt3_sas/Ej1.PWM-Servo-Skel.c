@@ -69,19 +69,20 @@ static EventGroupHandle_t FlagsEventos;
 #define ESTADO_WHISKER_ATAQUE 6
 #define ESTADO_WHISKER_ATRAS 7
 
+SemaphoreHandle_t reinicioOdometria;
+
 int estado = ESTADO_BUSCAR_CENTRO; //Se empieza en buscar centro
 int estado_anterior = -1;
 //variables para controlar la distancia recorrida por el robot y el angulo de giro
 volatile float angulo_der = 0.0;
 volatile float angulo_izq = 0.0;
-volatile float angulo_der_mov = 0.0;
-volatile float angulo_izq_mov = 0.0;
+
 volatile float distancia_recorrida = 0.0;
 volatile float angulo_recorrido = 0.0;
-// Variables globales de localización
-float rc1 = 0;
-float theta = 0;
-
+volatile float angulo_der_mov = 0.0;
+volatile float angulo_izq_mov = 0.0;
+float rc1;
+int reinicio_od = -1;
 
 
 //PUERTOS USADOS, PARA SABERLO PARA FUTURAS IMPLEMENTACIONES
@@ -147,21 +148,23 @@ void actualizar_odometria()
 {
     EventBits_t eventosMOTOR;
    //le pasamos como argumento la distancia inicial al centro (50cm)
-//    float angulo_izq_anterior = 0.0;
-//    float angulo_der_anterior = 0.0;
+
     float d_izq;
     float d_der;
     float d;
-    float rc0 = 40;
-//    float delta_theta;
-//    float drc;
-    // Cambios en los ángulos
-//    float delta_angulo_izq;
-//    float delta_angulo_der;
-
-
+    float rc0 = 26.0;
 
     eventosMOTOR = xEventGroupWaitBits(FlagsEventos, INT_ENCODER_DER_MOV | INT_ENCODER_IZQ_MOV, pdFALSE, pdFALSE, portMAX_DELAY);
+
+    if (xSemaphoreTake(reinicioOdometria, 0) == pdTRUE)
+          {
+          rc0 = 26.0;
+          rc1 = 0.0;
+          angulo_der_mov=0;
+          angulo_izq_mov=0;
+
+     //     reinicio_od = -1;
+          }
 
     if (eventosMOTOR & INT_ENCODER_DER_MOV) {
          xEventGroupClearBits(FlagsEventos, INT_ENCODER_DER_MOV);
@@ -202,7 +205,7 @@ void actualizar_odometria()
         rc1 = 0;
         angulo_der_mov=0;
         angulo_izq_mov=0;
-        rc0=40;
+        rc0=26;
     }
     // Guardar el nuevo rc como estado inicial para la próxima iteración
      rc0 = rc1;
@@ -393,7 +396,7 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
          {
              xEventGroupSetBits(FlagsEventos, MOTOR_30KG_APAGAR);
          }
-         if(B[index] < B[6])
+         if(B[index] <= B[6])
            {
              xEventGroupSetBits(FlagsEventos, ESQUIVAR);
            }
@@ -505,6 +508,8 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
                       OLED_sendStrXY("ESQUIVO", 1, 0);
                       estado_anterior = ESTADO_ESQUIVO;
 
+                      xSemaphoreGive(reinicioOdometria);
+
                       PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+20); //Giro sobre si mismo 1 segundo y luego me voy a buscar borde para volver al centro
                       PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+20);
 
@@ -522,6 +527,8 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
                       OLED_clearDisplay();
                       OLED_sendStrXY("WHISKER ATACO", 1, 0);
                       estado_anterior = ESTADO_WHISKER_ATAQUE;
+                      //reinicio_od = 0;
+                      xSemaphoreGive(reinicioOdometria);
 
                       PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+20);
                       PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+20);
@@ -582,14 +589,14 @@ unsigned short binary_lookup(unsigned short *A, unsigned short key, unsigned sho
           }
           if((eventosMOTOR & INT_SENSOR_LINEA_ATRAS) && !(eventosMOTOR & INT_SENSOR_LINEA_ATRAS2))
           {
-              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT);
-              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2-10);
+              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT-20);
+              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2-20); //este
               estado = ESTADO_BORDE;
           }
           if((eventosMOTOR & INT_SENSOR_LINEA_ATRAS2) && !(eventosMOTOR & INT_SENSOR_LINEA_ATRAS))
           {
-              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+10);
-              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2);
+              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_6, STOPCOUNT+20); //este
+              PWMPulseWidthSet(PWM1_BASE, PWM_OUT_7, STOPCOUNT2+20);
               estado = ESTADO_BORDE;
           }
 
@@ -614,7 +621,7 @@ int main(void){
     OLED_Init();
     OLED_clearDisplay();
 
-            // Configura pulsadores placa TIVA (int. por flanco de bajada)
+    // Configura pulsadores placa TIVA (int. por flanco de bajada)
     SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
     GPIOPinConfigure(GPIO_PA0_U0RX);
@@ -685,6 +692,11 @@ int main(void){
             {
             }
         }
+    reinicioOdometria = xSemaphoreCreateBinary();
+    if (reinicioOdometria == NULL) {
+           // Error al crear el semáforo
+           while(1);
+       }
 
     FlagsEventos = xEventGroupCreate();
      if( FlagsEventos == NULL )

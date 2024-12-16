@@ -14,13 +14,13 @@
 
 
 void DFPlayer_SendCommand(uint8_t command, uint8_t param1, uint8_t param2) {
-    uint8_t packet[10] = {0x7E, 0xFF, 0x06, command, 0x00, param1, param2, 0xEF};
-    uint16_t checksum = 0xFFFF - (command + param1 + param2) + 1;
-    int i;
-    packet[7] = (checksum >> 8) & 0xFF;
-    packet[8] = checksum & 0xFF;
+    uint8_t packet[10] = {0x7E, 0xFF, 0x06, command, 0x00, param1, param2, 0x00, 0x00, 0xEF};
+    uint16_t checksum = 0xFFFF - (0xFF + 0x06 + command + 0x00 + param1 + param2) + 1;
 
-    for (i = 0; i < 10; i++) {
+    packet[7] = (checksum >> 8) & 0xFF; // Parte alta del checksum
+    packet[8] = checksum & 0xFF;       // Parte baja del checksum
+    int i;
+    for ( i = 0; i < 10; i++) {
         UARTCharPut(UART3_BASE, packet[i]);
     }
 }
